@@ -1,0 +1,819 @@
+new;
+// This program produces all plots and forecast evaluations in Guppy, Nguyen and Vahid
+
+// The user only needs to change the country code and gender to repeat the analysis for males and females in different countries
+// The input excel data files should be in a subdirectory of the working directory called /data
+// The output will be saved in a text file identified by country_gender_forecasts.txt
+
+// It performs out of sample mortality forecasting for ages 50 to 89
+// It starts 10 years before the end of the sample period, which is either 2017 or 2016
+// It estimates all models and then forecasts the next 1 year, or 5 years or 10 years for each age
+// It then adds one observation to the estimation sample and repeats
+// It produces 10 sets of 1-step, 6 sets of 5-step and 1 set of 10 step ahead forecasts that can be evaluated
+
+country = "USA"; //country name
+gender = "male"; //male or female
+vintage = "2019_08_09";
+
+datafile = "data/" $+ country $+"_" $+ gender $+"_" $+ vintage $+ ".xlsx";
+outfile = country $+"_" $+ gender $+ "_forecasts.txt";
+
+
+// read data
+range = "B2:AO69";
+mrate = xlsreadm(datafile, range, 1, ""); //read mortality rate data
+
+lmr = ln(mrate);  //compute the log mortality rate
+
+n = rows(lmr);  // Important: n should not be overwritten throughout the program
+
+year = seqa(1950,1,n);
+
+age = seqa(50,1,40);
+
+
+
+//***************** This chunck of code produces the first plot in the paper ****************************
+//Declare the structure for time series plots of mortality rates for all ages in one graph
+struct plotControl myPlot;
+
+//Initialize the structure 
+myplot = plotGetDefaults("xy");
+plotSetTitle(&myPlot, "Plot of " $+ gender $+ " log mortality rates in " $+ country);
+plotSetGrid(&myPlot, "off");
+plotSetXLabel( &myPlot, "Year");
+plotSetYLabel( &myPlot, "ln(m)");
+plotSetLegend(&myPlot, "off"); 
+plotSetXTicInterval(&myplot, 5, 1950);
+
+//Plot the data using the plotControl structure 
+plotXY(myplot, year,lmr);
+
+dim = { 16, 11 };
+plotSave(country $+ gender $+"-logmort.png", dim);
+
+
+inend = n-10; //keep 10 years for evaluation
+lmrin=lmr[1:inend,.];  //only use data from 1950 to 10 years before the end of the sample for estimation
+dlmrin = lmrin[2:inend,.]-lmrin[1:inend-1,.]; //first difference of lmrin
+
+
+//estimating kt with singular value decomposition
+
+ax = meanc(lmrin);
+lmrinc= lmrin - ax'; //make all columns of lmrin sum to zero
+
+{u, s, v} = svd2(lmrinc);
+
+bx = v[.,1]/sumc(v[.,1]);
+
+kt = sumc(v[.,1])*s[1,1]*u[.,1];
+
+nn=rows(kt);
+
+dkt = kt[2:nn]-kt[1:nn-1];
+
+lcdrifts = bx*meanc(dkt); //Lee-Carter drift for each age
+
+rwddrifts = meanc(dlmrin); //Drifts from RWD models for each age
+
+
+// Plot ADF statistics for log-mortality rates
+adfcalc=zeros(40,1);
+i=1; do while i<=40;
+	adfcalc[i]=adf(lmrin[.,i],4,2,2);
+i=i+1; endo;
+
+
+age=seqa(50,1,40);
+adfcv=-3.491*ones(40,1);
+
+//Declare the structure 
+struct plotControl myPlot2;
+
+//Initialize the structure 
+myplot2 = plotGetDefaults("bar");
+
+plotSetGrid(&myPlot2, "off");
+plotSetTitle(&myPlot2, "ADF test statistics for log mortality rates-" $+ country $+ "-" $+ gender );
+plotSetXLabel( &myPlot2, "Age");
+plotSetYLabel( &myPlot2, "ADF" );
+plotSetLegend(&myPlot2, "off"); 
+
+plotBar(myPlot2, age, adfcalc);
+myplot2 = plotGetDefaults("XY");
+plotSetLegend(&myPlot2, "off"); 
+plotSetLineColor(&myPlot2, "black");
+plotSetLineThickness (&myPlot2, 2);
+plotAddXY( myPlot2, age, adfcv);
+
+dim = { 16, 11 };
+plotSave(country $+ gender $+"-adflogmort.png", dim);
+
+// Get Lee-Carter residuals and test if they are stationary
+
+indep=ones(nn,1)~kt;
+axbx = lmrin/indep;
+ehat = lmrin - indep*axbx;
+adfresid=zeros(40,1);
+i=1; do while i<=40;
+	adfresid[i]=adf(ehat[.,i],4,0,2);
+i=i+1; endo;
+
+mac2010=-3.443*ones(40,1);
+
+//Declare the structure to plot the ADF stat on Lee-Carter residuals
+struct plotControl myPlot2;
+
+myplot2 = plotGetDefaults("bar");
+plotSetGrid(&myPlot2, "off");
+plotSetTitle(&myPlot2, "ADF test statistics for Lee-Carter residuals-" $+ country $+ "-" $+ gender);
+plotSetXLabel( &myPlot2, "Age");
+plotSetYLabel( &myPlot2, "ADF" );
+plotSetLegend(&myPlot2, "off"); 
+
+plotBar(myPlot2, age, adfresid);
+myplot2 = plotGetDefaults("XY");
+plotSetLegend(&myPlot2, "off"); 
+plotSetLineColor(&myPlot2, "black");
+plotSetLineThickness (&myPlot2, 2);
+plotAddXY( myPlot2, age, mac2010); //add ADF critical values to the bar plot
+
+dim = { 16, 11 };
+plotSave(country $+ gender $+"-adfLCresid.png", dim);
+
+// Compute first order serial correlation in the Lee-Carter residuals and plot them
+rhos = zeros(40,1);
+
+i=1; do while i<=40;
+	et=ehat[2:nn,i];
+	elag = ehat[1:nn-1,i];
+	cx = corrx(et~elag);
+	rhos[i]=cx[1,2];
+i=i+1; endo;
+
+stdrho=ones(40,1)*2/sqrt(nn);
+//Declare the structure for barplots of first order serial correlation in residuals
+struct plotControl myPlot2;
+
+//Initialize the structure 
+myplot2 = plotGetDefaults("bar");
+
+plotSetGrid(&myPlot2, "off");
+plotSetTitle(&myPlot2, "First order autocorrelation of the Lee-Carter residuals");
+plotSetXLabel( &myPlot2, "Age");
+plotSetYLabel( &myPlot2, "First order autocorrelation" );
+plotSetLegend(&myPlot2, "off"); 
+plotBar(myPlot2, age, rhos);
+myplot2 = plotGetDefaults("XY");
+plotSetLegend(&myPlot2, "off"); 
+plotSetLineColor(&myPlot2, "black");
+plotSetLineThickness (&myPlot2, 2);
+plotAddXY( myPlot2, age, stdrho); //add standard errors to the plot
+
+dim = { 16, 11 };
+plotSave(country $+ gender $+"-rhoLCresid.png", dim);
+
+
+
+// The sparse VECM model
+nin = rows(dlmrin);
+asparse=zeros(40,1);
+bsparse=zeros(40,40);
+residsparse= zeros(nin,40);
+asparse[1,1] = meanc(dlmrin[.,1]); //for age 50 use the RWD model
+bsparse[1,1] = 0;
+residsparse[.,1] = dlmrin[.,1]-meanc(dlmrin[.,1]);
+lmrinlag = lmrin[1:inend-1,.];
+
+
+i=2; do while i<=40;
+	indep=ones(nin,1)~(lmrinlag[.,i-1]-lmrinlag[.,i]);
+	bhat = dlmrin[.,i]/indep;
+	asparse[i,1]=bhat[1,1];
+	bsparse[i,i-1]=bhat[2,1];
+	bsparse[i,i] = -bhat[2,1];
+	residsparse[.,i]=dlmrin[.,i]-indep*bhat;
+i=i+1; endo;
+
+// Plot ADF statistics for the spreads
+
+adfcv=-3.491*ones(40,1);
+adfcalcsp=zeros(40,1);
+i=2; do while i<=40;
+	adfcalcsp[i]=adf(lmrin[.,i]-lmrin[.,i-1],4,2,2);
+i=i+1; endo;
+
+//Declare the structure for plotting adf results for spreads
+struct plotControl myPlot2;
+
+myplot2 = plotGetDefaults("bar");
+plotSetGrid(&myPlot2, "off");
+plotSetTitle(&myPlot2, "ADF test statistics for the spreads - " $+ country $+ " - " $+ gender );
+plotSetXLabel( &myPlot2, "Age");
+plotSetYLabel( &myPlot2, "ADF" );
+plotSetLegend(&myPlot2, "off"); 
+
+plotBar(myPlot2, age, adfcalcsp);
+myplot2 = plotGetDefaults("XY");
+plotSetLegend(&myPlot2, "off"); 
+plotSetLineColor(&myPlot2, "black");
+plotSetLineThickness (&myPlot2, 2);
+plotAddXY( myPlot2, age, adfcv);
+
+dim = { 16, 11 };
+plotSave(country $+ gender $+"-adfSpreads.png", dim);
+
+
+
+//Plot the first order autocorrelation in the residuals of the sparse model
+rhosparse = zeros(40,1);
+
+i=1; do while i<=40;
+	et=residsparse[2:nin,i];
+	elag = residsparse[1:nin-1,i];
+	cx = corrx(et~elag);
+	rhosparse[i]=cx[1,2];
+i=i+1; endo;
+
+stdrho=ones(40,1)*2/sqrt(nin);
+stdrho=0.4*ones(40,1)~stdrho~(-stdrho)~(-0.4*ones(40,1));
+//Declare the structure for barplots of first order serial correlation in residuals
+struct plotControl myplot2;
+myplot2 = plotGetDefaults("bar");
+
+plotSetGrid(&myPlot2, "off");
+plotSetTitle(&myPlot2, "First order autocorrelation of the sparse VECM residuals  - " $+ country $+ " - " $+ gender );
+plotSetXLabel( &myPlot2, "Age");
+plotSetYLabel( &myPlot2, "First order autocorrelation" );
+plotSetLegend(&myPlot2, "off"); 
+plotBar(myPlot2, age, rhosparse);
+myplot2 = plotGetDefaults("XY");
+plotSetLegend(&myPlot2, "off"); 
+plotSetLineColor(&myPlot2, "black");
+th = {-1,-1,2,2,-1};
+plotSetLineThickness (&myPlot2, th);
+plotAddXY( myPlot2, age, stdrho); //add standard errors to the plot
+dim = { 16, 11 };
+plotSave(country $+ gender $+"-rhoVECMresid.png", dim);
+
+
+
+//plotting drifts in Lee-Carter vs RWD
+//Declare the structure 
+struct plotControl myPlot;
+
+//Initialize the structure 
+myplot = plotGetDefaults("xy");
+
+plotSetGrid(&myPlot, "off");
+plotSetTitle(&myPlot, "Lee-Carter and Random Walk Drifts");
+plotSetXLabel( &myPlot, "Age");
+plotSetYLabel( &myPlot, "Drift" );
+//Set labels, location, and orientation of legend
+label = "Lee-Carter" $| "Random Walk";
+location = "top left";
+orientation = 1;
+plotSetLegend(&myPlot, label, location, orientation); 
+
+//Plot the data using the plotControl structure 
+plotXY(myplot, age,lcdrifts~rwddrifts);
+dim = { 16, 11 };
+plotSave(country $+ gender $+"-drifts.png", dim);
+
+flcerr = {};
+flccerr={};
+frwderr={};
+fecmerr={};
+
+
+//loop over the in sample and out of sample
+lastobs = n-10; do while lastobs <= n-1;
+	
+lmrin=lmr[1:lastobs,.];  //use data from 1950 to lastobs for estimation
+dlmrin = lmrin[2:lastobs,.]-lmrin[1:lastobs-1,.]; //first difference of lmrin
+
+//estimating kt with singular value decomposition
+
+ax = meanc(lmrin);
+lmrinc= lmrin - ax'; //make all columns of lmrin sum to zero
+
+{u, s, v} = svd2(lmrinc);
+
+bx = v[.,1]/sumc(v[.,1]);
+
+kt = sumc(v[.,1])*s[1,1]*u[.,1];
+
+nn=rows(kt);
+
+dkt = kt[2:nn]-kt[1:nn-1];
+
+lcdrifts = bx*meanc(dkt); //Lee-Carter drift for each age
+
+rwddrifts = meanc(dlmrin); //Drifts from RWD models for each age
+
+
+// The sparse VECM model
+nin = rows(dlmrin);
+asparse=zeros(40,1);
+bsparse=zeros(40,40);
+residsparse= zeros(nin,40);
+asparse[1,1] = meanc(dlmrin[.,1]); //for age 50 use the RWD model
+bsparse[1,1] = 0;
+residsparse[.,1] = dlmrin[.,1]-meanc(dlmrin[.,1]);
+lmrinlag = lmrin[1:lastobs-1,.];
+
+
+i=2; do while i<=40;
+	indep=ones(nin,1)~(lmrinlag[.,i-1]-lmrinlag[.,i]);
+	bhat = dlmrin[.,i]/indep;
+	asparse[i,1]=bhat[1,1];
+	bsparse[i,i-1]=bhat[2,1];
+	bsparse[i,i] = -bhat[2,1];
+	residsparse[.,i]=dlmrin[.,i]-indep*bhat;
+i=i+1; endo;
+
+//forecast out of sample
+lmrout = lmr[lastobs+1,.]; //Actual values for the next year
+lmroutlag = lmr[lastobs,.]'; //use this 40x1 vector to forecast from VECM recursively
+	flc  = (ax + bx*kt[nn] + lcdrifts)';
+	flcc = lmr[lastobs,.] + lcdrifts';
+	frwd = lmr[lastobs,.] + rwddrifts';
+	lmroutlag = lmroutlag+ asparse + bsparse*lmroutlag ;
+	fecm = lmroutlag';
+
+
+flcerr  = flcerr | (lmrout-flc);
+flccerr = flccerr | (lmrout-flcc);
+frwderr = frwderr | (lmrout-frwd);
+fecmerr = fecmerr | (lmrout-fecm);
+
+lastobs = lastobs+1; endo;
+
+mae = meanc(meanc(abs(flcerr)))~meanc(meanc(abs(flccerr)))~meanc(meanc(abs(frwderr)))~meanc(meanc(abs(fecmerr)));
+mae =100*mae;
+mse = meanc(meanc(flcerr^2))~meanc(meanc(flccerr^2))~meanc(meanc(frwderr^2))~meanc(meanc(fecmerr^2));
+rmse =100*sqrt(mse);
+
+let mask[1,4] = 1 1 1 1;      
+let fmt[4,3] = "-*.*lf " 8 2 //first column format
+"*.*lf" 8 2               // other column format 
+"*.*lf" 8 2               // other column format 
+"*.*lf" 8 2;              // other column format 
+
+let maskhdr[1,4] = 0 0 0 0;
+let fmthdr[4,3] = "-*.*s " 8 8
+"*.*s" 8 8
+"*.*s" 8 8
+"*.*s" 8 8;
+
+output file = ^outfile reset;
+print "1-step ahead forecast evaluation results for " country " - " gender;
+print "----------------------------------------------------------";
+print;
+print "MAE for all ages from 50 to 89 made in 2007";
+d=printfm("LC"~"LCAdj"~"RWD"~"SpVECM",maskhdr,fmthdr);
+print;
+d=printfm(mae,mask,fmt);
+print;
+print;
+print "RMSE for all ages from 50 to 89 made in 2007";
+d=printfm("LC"~"LCAdj"~"RWD"~"SpVECM",maskhdr,fmthdr);
+print;
+d=printfm(rmse,mask,fmt);
+print;
+print;
+print "***************************************************";
+print;
+print "Diebold-Mariano test results (p-values)";
+print;
+print "H0: sparse VECM is equivalent to model X";
+print "H1: sparse VECM is better than model X";
+print;
+print "Loss function: MAE, 1-step ahead forecast only";
+print "Model X: Lee-Carter: " dm(vec(fecmerr),vec(flcerr),1,5);
+print "Model X: Lee-Carter with jump-off correction: " dm(vec(fecmerr),vec(flccerr),1,5);
+print "Model X: RWD " dm(vec(fecmerr),vec(frwderr),1,5);
+print;
+print "Loss function: RMSE, 1-step ahead forecast only";
+print "Model X: Lee-Carter: " dm(vec(fecmerr),vec(flcerr),0,5);
+print "Model X: Lee-Carter with jump-off correction: " dm(vec(fecmerr),vec(flccerr),0,5);
+print "Model X: RWD " dm(vec(fecmerr),vec(frwderr),0,5);
+print;
+print "****************************************************";
+print;
+
+
+flcerr = {};
+flccerr={};
+frwderr={};
+fecmerr={};
+
+flcerr5 = {};
+flccerr5={};
+frwderr5={};
+fecmerr5={};
+
+
+//loop over the in sample and out of sample
+lastobs = n-10; do while lastobs <= n-5;
+	
+lmrin=lmr[1:lastobs,.];  //use data from 1950 to lastobs for estimation
+dlmrin = lmrin[2:lastobs,.]-lmrin[1:lastobs-1,.]; //first difference of lmrin
+
+//estimating kt with singular value decomposition
+
+ax = meanc(lmrin);
+lmrinc= lmrin - ax'; //make all columns of lmrin sum to zero
+
+{u, s, v} = svd2(lmrinc);
+
+bx = v[.,1]/sumc(v[.,1]);
+
+kt = sumc(v[.,1])*s[1,1]*u[.,1];
+
+nn=rows(kt);
+
+dkt = kt[2:nn]-kt[1:nn-1];
+
+lcdrifts = bx*meanc(dkt); //Lee-Carter drift for each age
+
+rwddrifts = meanc(dlmrin); //Drifts from RWD models for each age
+
+
+// The sparse VECM model
+nin = rows(dlmrin);
+asparse=zeros(40,1);
+bsparse=zeros(40,40);
+residsparse= zeros(nin,40);
+asparse[1,1] = meanc(dlmrin[.,1]); //for age 50 use the RWD model
+bsparse[1,1] = 0;
+residsparse[.,1] = dlmrin[.,1]-meanc(dlmrin[.,1]);
+lmrinlag = lmrin[1:lastobs-1,.];
+
+
+i=2; do while i<=40;
+	indep=ones(nin,1)~(lmrinlag[.,i-1]-lmrinlag[.,i]);
+	bhat = dlmrin[.,i]/indep;
+	asparse[i,1]=bhat[1,1];
+	bsparse[i,i-1]=bhat[2,1];
+	bsparse[i,i] = -bhat[2,1];
+	residsparse[.,i]=dlmrin[.,i]-indep*bhat;
+i=i+1; endo;
+
+//forecast out of sample
+lmrout = lmr[lastobs+1:lastobs+5,.]; //Actual values for the next 5 years
+lmroutlag = lmr[lastobs,.]'; //use this 40x1 vector to forecast from VECM recursively
+flc  = zeros(5,40); //Lee-Carter forecasts for 5 years for all ages
+flcc = zeros(5,40); //Lee-Carter forecasts with jump-off correction
+frwd = zeros(5,40); //Random Walk with Drift forecasts
+fecm = zeros(5,40); //Sparse VECM forecasts
+
+h=1; do while h<=5;
+	flc[h,.]  = (ax + bx*kt[nn] + h*lcdrifts)';
+	flcc[h,.] = lmr[lastobs,.] + h*lcdrifts';
+	frwd[h,.] = lmr[lastobs,.] + h*rwddrifts';
+	lmroutlag = lmroutlag+ asparse + bsparse*lmroutlag ;
+	fecm[h,.] = lmroutlag';
+h=h+1; endo;
+
+
+flcerr5  = flcerr5 | (lmrout[5,.]-flc[5,.]);
+flccerr5 = flccerr5 | (lmrout[5,.]-flcc[5,.]);
+frwderr5 = frwderr5 | (lmrout[5,.]-frwd[5,.]);
+fecmerr5 = fecmerr5 | (lmrout[5,.]-fecm[5,.]);
+
+flcerr  = flcerr | (lmrout-flc);
+flccerr = flccerr | (lmrout-flcc);
+frwderr = frwderr | (lmrout-frwd);
+fecmerr = fecmerr | (lmrout-fecm);
+
+lastobs = lastobs+1; endo;
+//lastobs = lastobs+5; endo; //use this if you want non-overlapping 5 years.
+
+mae5 = meanc(meanc(abs(flcerr5)))~meanc(meanc(abs(flccerr5)))~meanc(meanc(abs(frwderr5)))~meanc(meanc(abs(fecmerr5)));
+mae5 =100*mae5;
+
+mae = meanc(meanc(abs(flcerr)))~meanc(meanc(abs(flccerr)))~meanc(meanc(abs(frwderr)))~meanc(meanc(abs(fecmerr)));
+mae =100*mae;
+
+mse5 = meanc(meanc(flcerr5^2))~meanc(meanc(flccerr5^2))~meanc(meanc(frwderr5^2))~meanc(meanc(fecmerr5^2));
+rmse5 =100*sqrt(mse5);
+
+mse = meanc(meanc(flcerr^2))~meanc(meanc(flccerr^2))~meanc(meanc(frwderr^2))~meanc(meanc(fecmerr^2));
+rmse =100*sqrt(mse);
+
+
+print "5-step ahead forecast evaluation results for " country " - " gender;
+print "--------------------------------------------------------";
+print;
+print "MAE of 1 to 5 year ahead forecasts for all ages from 50 to 89 made in 2007";
+d=printfm("LC"~"LCAdj"~"RWD"~"SpVECM",maskhdr,fmthdr);
+print;
+d=printfm(mae,mask,fmt);
+print;
+print;
+print "RMSE of 1 to 5 year ahead forecasts for all ages from 50 to 89 made in 2007";
+d=printfm("LC"~"LCAdj"~"RWD"~"SpVECM",maskhdr,fmthdr);
+print;
+d=printfm(rmse,mask,fmt);
+print;
+print;
+print "MAE of 5 year ahead forecasts for all ages from 50 to 89 made in 2007";
+d=printfm("LC"~"LCAdj"~"RWD"~"SpVECM",maskhdr,fmthdr);
+print;
+d=printfm(mae5,mask,fmt);
+print;
+print;
+print "RMSE of 5 year ahead forecasts for all ages from 50 to 89 made in 2007";
+d=printfm("LC"~"LCAdj"~"RWD"~"SpVECM",maskhdr,fmthdr);
+print;
+d=printfm(rmse5,mask,fmt);
+print;
+print;
+print "***************************************************";
+print;
+print "Diebold-Mariano test results (p-values)";
+print;
+print "H0: sparse VECM is equivalent to model X";
+print "H1: sparse VECM is better than model X";
+print;
+print "Loss function: MAE, 5-step ahead forecast only";
+print "Model X: Lee-Carter: " dm(vec(fecmerr5),vec(flcerr5),1,5);
+print "Model X: Lee-Carter with jump-off correction: " dm(vec(fecmerr5),vec(flccerr5),1,5);
+print "Model X: RWD " dm(vec(fecmerr5),vec(frwderr5),1,5);
+print;
+print "Loss function: RMSE, 5-step ahead forecast only";
+print "Model X: Lee-Carter: " dm(vec(fecmerr5),vec(flcerr5),0,5);
+print "Model X: Lee-Carter with jump-off correction: " dm(vec(fecmerr5),vec(flccerr5),0,5);
+print "Model X: RWD " dm(vec(fecmerr5),vec(frwderr5),0,5);
+print;
+print "Loss function: MAE, 1 to 5-step ahead forecasts";
+print "Model X: Lee-Carter: " dm(vec(fecmerr),vec(flcerr),1,5);
+print "Model X: Lee-Carter with jump-off correction: " dm(vec(fecmerr),vec(flccerr),1,5);
+print "Model X: RWD " dm(vec(fecmerr),vec(frwderr),1,5);
+print;
+print "Loss function: RMSE, 1 to 5-step ahead forecasts";
+print "Model X: Lee-Carter: " dm(vec(fecmerr),vec(flcerr),0,5);
+print "Model X: Lee-Carter with jump-off correction: " dm(vec(fecmerr),vec(flccerr),0,5);
+print "Model X: RWD " dm(vec(fecmerr),vec(frwderr),0,5);
+print;
+print "****************************************************";
+print;
+
+//Analysis of 10-step ahead forecasts
+flcerr = {};
+flccerr={};
+frwderr={};
+fecmerr={};
+
+flcerr10 = {};
+flccerr10 ={};
+frwderr10 ={};
+fecmerr10 ={};
+
+//loop over the in sample and out of sample
+lastobs = n-10; do while lastobs <= n-10;
+	
+lmrin=lmr[1:lastobs,.];  //use data from 1950 to lastobs for estimation
+dlmrin = lmrin[2:lastobs,.]-lmrin[1:lastobs-1,.]; //first difference of lmrin
+age = seqa(50,1,40);
+
+//estimating kt with singular value decomposition
+
+ax = meanc(lmrin);
+lmrinc= lmrin - ax'; //make all columns of lmrin sum to zero
+
+{u, s, v} = svd2(lmrinc);
+
+bx = v[.,1]/sumc(v[.,1]);
+
+kt = sumc(v[.,1])*s[1,1]*u[.,1];
+
+nn=rows(kt);
+
+dkt = kt[2:nn]-kt[1:nn-1];
+
+lcdrifts = bx*meanc(dkt); //Lee-Carter drift for each age
+
+rwddrifts = meanc(dlmrin); //Drifts from RWD models for each age
+
+/* a small test to see that SVD2 has indeed computed the least squares estimates
+indep=ones(rows(kt),1)~kt;
+test = lmrin/indep;
+ax~test'~bx;
+*/
+
+
+// The sparse VECM model
+nin = rows(dlmrin);
+asparse=zeros(40,1);
+bsparse=zeros(40,40);
+residsparse= zeros(nin,40);
+asparse[1,1] = meanc(dlmrin[.,1]); //for age 50 use the RWD model
+bsparse[1,1] = 0;
+residsparse[.,1] = dlmrin[.,1]-meanc(dlmrin[.,1]);
+lmrinlag = lmrin[1:lastobs-1,.];
+
+
+i=2; do while i<=40;
+	indep=ones(nin,1)~(lmrinlag[.,i-1]-lmrinlag[.,i]);
+	bhat = dlmrin[.,i]/indep;
+	asparse[i,1]=bhat[1,1];
+	bsparse[i,i-1]=bhat[2,1];
+	bsparse[i,i] = -bhat[2,1];
+	residsparse[.,i]=dlmrin[.,i]-indep*bhat;
+i=i+1; endo;
+
+//forecast out of sample
+lmrout = lmr[lastobs+1:lastobs+10,.]; //Actual values for the next 10 years
+lmroutlag = lmr[lastobs,.]'; //use this 40x1 vector to forecast from VECM recursively
+flc  = zeros(10,40); //Lee-Carter forecasts for 10 years for all ages
+flcc = zeros(10,40); //Lee-Carter forecasts with jump-off correction
+frwd = zeros(10,40); //Random Walk with Drift forecasts
+fecm = zeros(10,40); //Sparse VECM forecasts
+
+h=1; do while h<=10;
+	flc[h,.]  = (ax + bx*kt[nn] + h*lcdrifts)';
+	flcc[h,.] = lmr[lastobs,.] + h*lcdrifts';
+	frwd[h,.] = lmr[lastobs,.] + h*rwddrifts';
+	lmroutlag = lmroutlag+ asparse + bsparse*lmroutlag ;
+	fecm[h,.] = lmroutlag';
+h=h+1; endo;
+
+
+flcerr10  = flcerr10 | (lmrout[10,.]-flc[10,.]);
+flccerr10 = flccerr10 | (lmrout[10,.]-flcc[10,.]);
+frwderr10 = frwderr10 | (lmrout[10,.]-frwd[10,.]);
+fecmerr10 = fecmerr10 | (lmrout[10,.]-fecm[10,.]);
+
+flcerr  = flcerr | (lmrout-flc);
+flccerr = flccerr | (lmrout-flcc);
+frwderr = frwderr | (lmrout-frwd);
+fecmerr = fecmerr | (lmrout-fecm);
+
+
+lastobs = lastobs+1; endo;
+
+
+mae = meanc(meanc(abs(flcerr)))~meanc(meanc(abs(flccerr)))~meanc(meanc(abs(frwderr)))~meanc(meanc(abs(fecmerr)));
+mae =100*mae;
+mae10 = meanc(meanc(abs(flcerr10)))~meanc(meanc(abs(flccerr10)))~meanc(meanc(abs(frwderr10)))~meanc(meanc(abs(fecmerr10)));
+mae10 =100*mae10;
+
+
+mse = meanc(meanc(flcerr^2))~meanc(meanc(flccerr^2))~meanc(meanc(frwderr^2))~meanc(meanc(fecmerr^2));
+rmse =100*sqrt(mse);
+mse10 = meanc(meanc(flcerr10^2))~meanc(meanc(flccerr10^2))~meanc(meanc(frwderr10^2))~meanc(meanc(fecmerr10^2));
+rmse10 =100*sqrt(mse10);
+
+print "10-step ahead forecast evaluation results for " country " - " gender;
+print "--------------------------------------------------------";
+print;
+print "MAE of 1 to 10 year ahead forecasts for all ages from 50 to 89 made in 2007";
+d=printfm("LC"~"LCAdj"~"RWD"~"SpVECM",maskhdr,fmthdr);
+print;
+d=printfm(mae,mask,fmt);
+print;
+print;
+print "RMSE of 1 to 10 year ahead forecasts for all ages from 50 to 89 made in 2007";
+d=printfm("LC"~"LCAdj"~"RWD"~"SpVECM",maskhdr,fmthdr);
+print;
+d=printfm(rmse,mask,fmt);
+print;
+print;
+print "MAE of 10 year ahead forecasts for all ages from 50 to 89 made in 2007";
+d=printfm("LC"~"LCAdj"~"RWD"~"SpVECM",maskhdr,fmthdr);
+print;
+d=printfm(mae10,mask,fmt);
+print;
+print;
+print "RMSE of 10 year ahead forecasts for all ages from 50 to 89 made in 2007";
+d=printfm("LC"~"LCAdj"~"RWD"~"SpVECM",maskhdr,fmthdr);
+print;
+d=printfm(rmse10,mask,fmt);
+print;
+print;
+print "***************************************************";
+print;
+print "Diebold-Mariano test results (p-values)";
+print;
+print "H0: sparse VECM is equivalent to model X";
+print "H1: sparse VECM is better than model X";
+print;
+print "Loss function: MAE, 10-step ahead forecast only";
+print "Model X: Lee-Carter: " dm(vec(fecmerr10),vec(flcerr10),1,10);
+print "Model X: Lee-Carter with jump-off correction: " dm(vec(fecmerr10),vec(flccerr10),1,10);
+print "Model X: RWD " dm(vec(fecmerr10),vec(frwderr10),1,10);
+print;
+print "Loss function: RMSE, 10-step ahead forecast only";
+print "Model X: Lee-Carter: " dm(vec(fecmerr10),vec(flcerr10),0,10);
+print "Model X: Lee-Carter with jump-off correction: " dm(vec(fecmerr10),vec(flccerr10),0,10);
+print "Model X: RWD " dm(vec(fecmerr10),vec(frwderr10),0,10);
+print;
+print "Loss function: MAE, 1 to 10-step ahead forecasts";
+print "Model X: Lee-Carter: " dm(vec(fecmerr),vec(flcerr),1,10);
+print "Model X: Lee-Carter with jump-off correction: " dm(vec(fecmerr),vec(flccerr),1,10);
+print "Model X: RWD " dm(vec(fecmerr),vec(frwderr),1,10);
+print;
+print "Loss function: RMSE, 1 to 10-step ahead forecasts";
+print "Model X: Lee-Carter: " dm(vec(fecmerr),vec(flcerr),0,10);
+print "Model X: Lee-Carter with jump-off correction: " dm(vec(fecmerr),vec(flccerr),0,10);
+print "Model X: RWD " dm(vec(fecmerr),vec(frwderr),0,10);
+print;
+
+output off;
+
+
+/*********** Proc DM for Diebold-Mariano test *******************
+loss = 0 for squared error
+loss = 1 for absolute error
+null: loss of model 0 = loss of model 1
+alternative: loss of model 0 < loss of model 1
+e0: errors of model 0
+e1: errors of model 1
+www: window width for the Newey-West HAC estimator
+returns the p-value of one sided test
+*****************************************************************/
+
+proc dm(e0,e1,loss,www); 
+	local d, dbar, vd, dmstat, jjj, nnn;
+	if loss==0; d = e0^2 - e1^2;
+	elseif loss==1; d = abs(e0)-abs(e1);
+	endif;
+	nnn=rows(d);
+	vd = d'd/nnn;
+	jjj=1; do while jjj<www;
+		vd = vd + 2 * (nnn-jjj) * d[jjj+1:nnn]'d[1:nnn-jjj] / (nnn^2);
+	jjj=jjj+1; endo;
+	dmstat = sqrt(nnn)*meanc(d)/sqrt(vd);
+	retp(cdfn(dmstat));
+endp;
+		
+
+
+
+proc adf(yy,maxlag,determin,ic);
+	local nyy, nyy0, ndyy, ii, yy0, yylag, dyy0, dyy, xx0, xx, nlag, jj, uhat, ssr, icval, bb, sebb, sigsq, dft;
+	nyy = rows(yy);
+	dyy0 = yy[2:nyy,.]-yy[1:nyy-1,.];
+	yylag = yy[maxlag+1:nyy-1,.];
+	dyy = dyy0[maxlag+1:nyy-1,.];
+	ndyy=rows(dyy);
+	if (determin==0);
+		xx0=yylag; 
+	elseif (determin==1);
+		xx0=yylag~ones(ndyy,1);
+	else;
+		xx0 = yylag~ones(ndyy,1)~seqa(1,1,ndyy);
+	endif;
+	ssr=zeros(maxlag+1,1);
+	xx=xx0;
+	ii = 0; do while ii <= maxlag;
+		if (ii>0);
+		xx=xx~dyy0[maxlag+1-ii:nyy-1-ii,.];
+		endif;
+		uhat = dyy - xx*(dyy/xx);
+		ssr[ii+1]=uhat'uhat;
+		ii=ii+1;
+	endo;
+	if (ic==0); //aic
+		icval = ln(ssr)+2*seqa(0,1,maxlag+1);
+	elseif (ic==1); //HQ
+		icval = ln(ssr)+2*seqa(0,1,maxlag+1)*ln(ln(ndyy));
+	else; //BIC
+		icval = ln(ssr)+seqa(0,1,maxlag+1)*ln(ndyy);
+	endif;
+	nlag=minindc(icval)-1;
+//	"nlag=" nlag;
+	dyy = dyy0[nlag+1:nyy-1,.]; //use as many obs that can be accommodated with nlag
+	xx=yy[nlag+1:nyy-1,.];
+	ndyy=rows(dyy);
+	if (determin==1);
+		xx=xx~ones(ndyy,1);
+	elseif (determin==2);
+		xx = xx~ones(ndyy,1)~seqa(1,1,ndyy);
+	endif;
+	ii = 1; do while ii <= nlag;
+		xx=xx~dyy0[nlag+1-ii:nyy-1-ii,.];
+		ii=ii+1;
+	endo;
+	bb = dyy/xx;
+	uhat = dyy - xx*bb;
+	sigsq=uhat'uhat/(ndyy-cols(xx));
+	sebb = sqrt(diag(sigsq*invpd(xx'xx)));
+	dft = bb[1]/sebb[1];
+//	bb~sebb;
+	retp(dft);
+endp;
+		
+	
+
+
+
+
+
+
+
+
+
